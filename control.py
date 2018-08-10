@@ -148,7 +148,7 @@ def controlDrone(vehicle, event):
     vehicle.groundspeed = gnd_speed
 
     if event == 'TAKEOFF':
-        arm_and_takeoff(gnd_speed)
+        arm_and_takeoff(1)
     elif event == 'FORWARD':
         if vehicle.armed:
             set_velocity_body(vehicle, gnd_speed, 0, 0)

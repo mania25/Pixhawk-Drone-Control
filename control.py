@@ -141,10 +141,10 @@ def set_velocity_body(vehicle, vx, vy, vz):
 
 #-- Key event function
 def controlDrone(vehicle, event):
-    gnd_speed = 2
+    gnd_speed = 0.5
 
     if event == 'TAKEOFF':
-        arm_and_takeoff(2)
+        arm_and_takeoff(gnd_speed)
     elif event == 'FORWARD':
         if vehicle.armed:
             set_velocity_body(vehicle, gnd_speed, 0, 0)
@@ -175,26 +175,29 @@ def controlDrone(vehicle, event):
 
 # The callback for when the client receives a CONNACK response from the server.
 def on_connect(client, userdata, flags, rc):
-    print("Connected with result code " + str(rc))
-    # Subscribing in on_connect() means that if we lose the connection and
-    # reconnect then subscriptions will be renewed.
-    client.subscribe("/controlling-drone")
+    if rc==0:
+        print("Connected with result code " + str(rc))
+        # Subscribing in on_connect() means that if we lose the connection and
+        # reconnect then subscriptions will be renewed.
+        client.subscribe("/controlling-drone")
 
-    # #-- Connect to the vehicle
-    print('Connecting...')
-    global vehicle
-    # vehicle = connect('tcp:192.168.2.1:5760', wait_ready=False)
-    vehicle = connect('/dev/ttyACM0', wait_ready=False)
+        # #-- Connect to the vehicle
+        print('Connecting...')
+        global vehicle
+        # vehicle = connect('tcp:192.168.2.1:5760', wait_ready=False)
+        vehicle = connect('/dev/ttyACM0', wait_ready=False)
 
-    commandTimer.start()    
+        commandTimer.start()    
 
-    # Callback definition for mode observer
-    def mode_callback(self, attr_name, observer):
-        print self.mode
-        print("Is Armed:% s" % vehicle.armed)
+        # Callback definition for mode observer
+        def mode_callback(self, attr_name, observer):
+            print self.mode
+            print("Is Armed:% s" % vehicle.armed)
 
-    # Add observer callback for attribute `mode`
-    vehicle.add_attribute_listener('mode', mode_callback)
+        # Add observer callback for attribute `mode`
+        vehicle.add_attribute_listener('mode', mode_callback)
+    else:
+        print("Bad connection Returned code=",rc)
 
 # The callback for when a PUBLISH message is received from the server.
 def on_message(client, userdata, msg):

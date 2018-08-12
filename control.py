@@ -69,7 +69,7 @@ def commandTimerTimeout():
         vehicle.mode = VehicleMode("LAND")
         print("Is Armed:% s" % vehicle.armed)
 
-commandTimer = TimerReset(10, commandTimerTimeout)
+commandTimer = TimerReset(15, commandTimerTimeout)
 
 def signal_handler(signal, frame):
         print('You pressed Ctrl+C!')
@@ -141,14 +141,14 @@ def set_velocity_body(vehicle, vx, vy, vz):
 
 #-- Key event function
 def controlDrone(vehicle, event):
-    gnd_speed = 0.5
+    gnd_speed = 2
 
     vehicle.airspeed = gnd_speed
 
     vehicle.groundspeed = gnd_speed
 
     if event == 'TAKEOFF':
-        arm_and_takeoff(1)
+        arm_and_takeoff(3)
     elif event == 'FORWARD':
         if vehicle.armed:
             set_velocity_body(vehicle, gnd_speed, 0, 0)

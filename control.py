@@ -141,7 +141,7 @@ def set_velocity_body(vehicle, vx, vy, vz):
 
 #-- Key event function
 def controlDrone(vehicle, event):
-    gnd_speed = 2
+    gnd_speed = 0.5
 
     vehicle.airspeed = gnd_speed
 

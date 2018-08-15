@@ -72,6 +72,7 @@ def commandTimerTimeout():
     if vehicle.armed:
         vehicle.mode = VehicleMode("LAND")
         print("Is Armed:% s" % vehicle.armed)
+        commandTimer.cancel()
 
 commandTimer = TimerReset(60, commandTimerTimeout)
 

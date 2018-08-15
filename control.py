@@ -1,7 +1,7 @@
 """
 Simple script for take off and control with arrow keys
 """
-from dronekit import connect, VehicleMode, LocationGlobalRelative, Command, LocationGlobal
+from dronekit import connect, VehicleMode, LocationGlobalRelative, Command, LocationGlobal, LocationGlobalRelative
 from pymavlink import mavutil
 import paho.mqtt.client as mqtt
 import os
@@ -9,6 +9,8 @@ from threading import Thread, Event, Timer
 import time
 import signal
 import sys
+import math
+import redis
 
 def TimerReset(*args, **kwargs):
     """ Global function for Timer """
@@ -58,6 +60,8 @@ class _TimerReset(Thread):
 
 global vehicle
 
+global redisClient
+
 #-- Setup the commanded flying speed
 global gnd_speed  # [m/s]
 
@@ -69,7 +73,7 @@ def commandTimerTimeout():
         vehicle.mode = VehicleMode("LAND")
         print("Is Armed:% s" % vehicle.armed)
 
-commandTimer = TimerReset(15, commandTimerTimeout)
+commandTimer = TimerReset(60, commandTimerTimeout)
 
 def signal_handler(signal, frame):
         print('You pressed Ctrl+C!')
@@ -113,6 +117,48 @@ def arm_and_takeoff(aTargetAltitude):
     #         break
     #     time.sleep(1)
 
+"""
+Convenience functions for sending immediate/guided mode commands to control the Copter.
+The set of commands demonstrated here include:
+* MAV_CMD_CONDITION_YAW - set direction of the front of the Copter (latitude, longitude)
+* MAV_CMD_DO_SET_ROI - set direction where the camera gimbal is aimed (latitude, longitude, altitude)
+* MAV_CMD_DO_CHANGE_SPEED - set target speed in metres/second.
+The full set of available commands are listed here:
+http://dev.ardupilot.com/wiki/copter-commands-in-guided-mode/
+"""
+
+def condition_yaw(heading, relative=False):
+    """
+    Send MAV_CMD_CONDITION_YAW message to point vehicle at a specified heading (in degrees).
+    This method sets an absolute heading by default, but you can set the `relative` parameter
+    to `True` to set yaw relative to the current yaw heading.
+    By default the yaw of the vehicle will follow the direction of travel. After setting 
+    the yaw using this function there is no way to return to the default yaw "follow direction 
+    of travel" behaviour (https://github.com/diydrones/ardupilot/issues/2427)
+    For more information see: 
+    http://copter.ardupilot.com/wiki/common-mavlink-mission-command-messages-mav_cmd/#mav_cmd_condition_yaw
+    """
+    
+    if vehicle.mode == "BRAKE":
+        vehicle.mode = VehicleMode("GUIDED")
+        
+    if relative:
+        is_relative = 1 #yaw relative to direction of travel
+    else:
+        is_relative = 0 #yaw is an absolute angle
+    # create the CONDITION_YAW command using command_long_encode()
+    msg = vehicle.message_factory.command_long_encode(
+        0, 0,    # target system, target component
+        mavutil.mavlink.MAV_CMD_CONDITION_YAW, #command
+        0, #confirmation
+        heading,    # param 1, yaw in degrees
+        0,          # param 2, yaw speed deg/s
+        1,          # param 3, direction -1 ccw, 1 cw
+        is_relative, # param 4, relative offset 1, absolute angle 0
+        0, 0, 0)    # param 5 ~ 7 not used
+    # send command to vehicle
+    vehicle.send_mavlink(msg)
+
  #-- Define the function for sending mavlink velocity command in body frame
 def set_velocity_body(vehicle, vx, vy, vz):
     """ Remember: vz is positive downward!!!
@@ -127,6 +173,10 @@ def set_velocity_body(vehicle, vx, vy, vz):
 
 
     """
+
+    if vehicle.mode == "BRAKE":
+        vehicle.mode = VehicleMode("GUIDED")
+
     msg = vehicle.message_factory.set_position_target_local_ned_encode(
         0,
         0, 0,
@@ -139,9 +189,55 @@ def set_velocity_body(vehicle, vx, vy, vz):
     vehicle.send_mavlink(msg)
     vehicle.flush()
 
+def goto_position_target_global_int(aLocation):
+    """
+    Send SET_POSITION_TARGET_GLOBAL_INT command to request the vehicle fly to a specified location.
+
+    For more information see: https://pixhawk.ethz.ch/mavlink/#SET_POSITION_TARGET_GLOBAL_INT
+
+    See the above link for information on the type_mask (0=enable, 1=ignore). 
+    At time of writing, acceleration and yaw bits are ignored.
+    """
+    msg = vehicle.message_factory.set_position_target_global_int_encode(
+        0,       # time_boot_ms (not used)
+        0, 0,    # target system, target component
+        mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT, # frame      
+        0b0000111111111000, # type_mask (only speeds enabled)
+        aLocation.lat*1e7, # lat_int - X Position in WGS84 frame in 1e7 * meters
+        aLocation.lon*1e7, # lon_int - Y Position in WGS84 frame in 1e7 * meters
+        aLocation.alt, # alt - Altitude in meters in AMSL altitude, not WGS84 if absolute or relative, above terrain if GLOBAL_TERRAIN_ALT_INT
+        0, # X velocity in NED frame in m/s
+        0, # Y velocity in NED frame in m/s
+        0, # Z velocity in NED frame in m/s
+        0, 0, 0, # afx, afy, afz acceleration (not supported yet, ignored in GCS_Mavlink)
+        0, 0)    # yaw, yaw_rate (not supported yet, ignored in GCS_Mavlink) 
+    # send command to vehicle
+    vehicle.send_mavlink(msg)
+    vehicle.flush()
+
+def get_distance_metres(aLocation1, aLocation2):
+    dlat        = aLocation2.lat - aLocation1.lat
+    dlong       = aLocation2.lon - aLocation1.lon
+    return math.sqrt((dlat*dlat) + (dlong*dlong)) * 1.113195e5
+
+def gotoGPS(vehicle, location):
+    currentLocation = vehicle.location.global_relative_frame
+    targetDistance = get_distance_metres(currentLocation, location)
+    goto_position_target_global_int(location)
+    vehicle.flush()
+    while vehicle.mode.name=="GUIDED": #Stop action if we are no longer in guided mode.
+        remainingDistance=get_distance_metres(vehicle.location.global_relative_frame, location)
+        if remainingDistance<=targetDistance*0.05: #Just below target, in case of undershoot.
+            print "Reached target"
+            break
+        time.sleep(2)
+
 #-- Key event function
 def controlDrone(vehicle, event):
-    gnd_speed = 0.5
+    if redisClient.get("GSPEED") == None:
+        gnd_speed = 0.5
+    else:
+        gnd_speed = float(redisClient.get("GSPEED"))
 
     vehicle.airspeed = gnd_speed
 
@@ -168,9 +264,31 @@ def controlDrone(vehicle, event):
             vehicle.mode = VehicleMode("LAND")
             print("Is Armed:% s" % vehicle.armed)
             commandTimer.cancel()
+    elif event.startswith("YAW"):
+        if vehicle.armed:
+            yaw = event.split(":")
+            condition_yaw(int(yaw[1]), relative=True)
+    elif event == 'BRAKE':
+        if vehicle.armed:
+            vehicle.mode = VehicleMode("BRAKE")
+    elif event.startswith("ALT"):
+        altMeter = event.split(":")
+        newLoc = LocationGlobalRelative (vehicle.location.global_relative_frame.lat, vehicle.location.global_relative_frame.lon, int(altMeter[1]))
+        gotoGPS(vehicle, newLoc)
+    elif event == "INCR":
+        if redisClient.get("GSPEED") != None:
+            if float(redisClient.get("GSPEED")) < 5.0:
+                redisClient.incrbyfloat("GSPEED", 0.1)
+        else:
+            redisClient.incrbyfloat("GSPEED", 0.1)
+    elif event == "DECR":
+        if redisClient.get("GSPEED") != None:
+            if float(redisClient.get("GSPEED")) > 0.5:
+                redisClient.incrbyfloat("GSPEED", -0.1)
     elif event == 'LANDANDSHUTDOWN':
         if not vehicle.armed:
             print("Is Armed:% s" % vehicle.armed)
+            commandTimer.cancel()
             os.system("shutdown -h now")
         else:
             print("Land it first!")
@@ -188,8 +306,11 @@ def on_connect(client, userdata, flags, rc):
         # #-- Connect to the vehicle
         print('Connecting...')
         global vehicle
-        # vehicle = connect('tcp:192.168.2.1:5760', wait_ready=False)
+        # vehicle = connect('localhost:14551', wait_ready=False)
         vehicle = connect('/dev/ttyACM0', wait_ready=False)
+
+        global redisClient
+        redisClient = redis.StrictRedis(host='localhost', port=6379, db=0)
 
         commandTimer.start()    
 
@@ -206,7 +327,7 @@ def on_connect(client, userdata, flags, rc):
 # The callback for when a PUBLISH message is received from the server.
 def on_message(client, userdata, msg):
     print(msg.topic + " " + str(msg.payload))
-    commandTimer.reset(10)    
+    commandTimer.reset()    
     controlDrone(vehicle, str(msg.payload))
 
 client = mqtt.Client()

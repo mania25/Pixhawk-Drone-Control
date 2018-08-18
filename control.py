@@ -161,6 +161,7 @@ def condition_yaw(heading, relative=False):
     vehicle.send_mavlink(msg)
 
  #-- Define the function for sending mavlink velocity command in body frame
+
 def set_velocity_body(vehicle, vx, vy, vz):
     """ Remember: vz is positive downward!!!
     http://ardupilot.org/dev/docs/copter-commands-in-guided-mode.html
@@ -254,41 +255,64 @@ def controlDrone(vehicle, event):
     elif event == 'BACKWARD':
         if vehicle.armed:
             set_velocity_body(vehicle, -gnd_speed, 0, 0)
+        else:
+            print("Vehicle is not armed.")
     elif event == 'LEFT':
         if vehicle.armed:
             set_velocity_body(vehicle, 0, -gnd_speed, 0)
+        else:
+            print("Vehicle is not armed.")
     elif event == 'RIGHT':
         if vehicle.armed:
             set_velocity_body(vehicle, 0, gnd_speed, 0)
+        else:
+            print("Vehicle is not armed.")
     elif event == 'LAND':
         if vehicle.armed:
             vehicle.mode = VehicleMode("LAND")
             print("Is Armed:% s" % vehicle.armed)
             commandTimer.cancel()
+            redisClient.set("GSPEED", 0.5)
+        else:
+            print("Vehicle is not armed.")
     elif event.startswith("YAW"):
         if vehicle.armed:
             yaw = event.split(":")
             condition_yaw(int(yaw[1]), relative=True)
+        else:
+            print("Vehicle is not armed.")
     elif event == 'BRAKE':
         if vehicle.armed:
             vehicle.mode = VehicleMode("BRAKE")
-    elif event.startswith("ALT"):
-        altMeter = event.split(":")
-        newLoc = LocationGlobalRelative (vehicle.location.global_relative_frame.lat, vehicle.location.global_relative_frame.lon, int(altMeter[1]))
-        gotoGPS(vehicle, newLoc)
-    elif event == "INCR":
-        if redisClient.get("GSPEED") != None:
-            if float(redisClient.get("GSPEED")) < 5.0:
-                redisClient.incrbyfloat("GSPEED", 0.1)
         else:
-            redisClient.incrbyfloat("GSPEED", 0.1)
+            print("Vehicle is not armed.")
+    elif event.startswith("ALT"):
+        if vehicle.armed:
+            altMeter = event.split(":")
+            newLoc = LocationGlobalRelative (vehicle.location.global_relative_frame.lat, vehicle.location.global_relative_frame.lon, int(altMeter[1]))
+            gotoGPS(vehicle, newLoc)
+        else:
+            print("Vehicle is not armed.")
+    elif event == "INCR":
+        if vehicle.armed:
+            if redisClient.get("GSPEED") != None:
+                if float(redisClient.get("GSPEED")) < 5.0:
+                    redisClient.incrbyfloat("GSPEED", 0.25)
+            else:
+                redisClient.incrbyfloat("GSPEED", 0.25)
+        else:
+            print("Vehicle is not armed.")
     elif event == "DECR":
-        if redisClient.get("GSPEED") != None:
-            if float(redisClient.get("GSPEED")) > 0.5:
-                redisClient.incrbyfloat("GSPEED", -0.1)
+        if vehicle.armed:
+            if redisClient.get("GSPEED") != None:
+                if float(redisClient.get("GSPEED")) > 0.5:
+                    redisClient.incrbyfloat("GSPEED", -0.25)
+        else:
+            print("Vehicle is not armed.")
     elif event == 'LANDANDSHUTDOWN':
         if not vehicle.armed:
             print("Is Armed:% s" % vehicle.armed)
+            redisClient.set("GSPEED", 0.5)
             commandTimer.cancel()
             os.system("shutdown -h now")
         else:
